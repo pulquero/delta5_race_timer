@@ -14,5 +14,8 @@
 		"LED_BRIGHTNESS": 255,
 		"LED_INVERT": false,
 		"LED_CHANNEL": 0
+	},
+	"RACETRACKER": {
+		"ADDRESS": "127.0.0.1"
 	}
 }

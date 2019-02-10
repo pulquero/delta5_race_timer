@@ -23,12 +23,13 @@ import json
 
 # LED imports
 import time
-from neopixel import *
-import signal
+#from neopixel import *
+#import signal
+from ANSIPixel import *
 
 sys.path.append('../delta5interface')
 sys.path.append('/home/pi/delta5_race_timer/src/delta5interface')  # Needed to run on startup
-from Delta5Interface import get_hardware_interface
+from RaceTrackerInterface import get_hardware_interface
 
 from Delta5Race import get_race_state
 
@@ -63,6 +64,7 @@ DB = SQLAlchemy(APP)
 Config = {}
 Config['GENERAL'] = {}
 Config['LED'] = {}
+Config['RACETRACKER'] = {}
 
 # LED strip configuration:
 Config['LED']['LED_COUNT']      = 150      # Number of LED pixels.
@@ -72,7 +74,7 @@ Config['LED']['LED_DMA']        = 10      # DMA channel to use for generating si
 Config['LED']['LED_BRIGHTNESS'] = 255     # Set to 0 for darkest and 255 for brightest
 Config['LED']['LED_INVERT']     = False   # True to invert the signal (when using NPN transistor level shift)
 Config['LED']['LED_CHANNEL']    = 0       # set to '1' for GPIOs 13, 19, 41, 45 or 53
-Config['LED']['LED_STRIP']      = ws.WS2811_STRIP_GRB   # Strip type and colour ordering
+Config['LED']['LED_STRIP']      = None   # Strip type and colour ordering
 
 # other default configurations
 Config['GENERAL']['HTTP_PORT'] = 5000
@@ -86,6 +88,7 @@ try:
         ExternalConfig = json.load(f)
     Config['GENERAL'].update(ExternalConfig['GENERAL'])
     Config['LED'].update(ExternalConfig['LED'])
+    Config['RACETRACKER'].update(ExternalConfig['RACETRACKER'])
     Config['GENERAL']['configFile'] = 1
     print 'Configuration file imported'
     APP.config['SECRET_KEY'] = Config['GENERAL']['SECRET_KEY']
@@ -136,7 +139,7 @@ def getAllLanguages():
     # return full language dictionary
     return Languages
 
-INTERFACE = get_hardware_interface()
+INTERFACE = get_hardware_interface(Config)
 RACE = get_race_state() # For storing race management variables
 
 PROGRAM_START = datetime.now()
@@ -214,7 +217,7 @@ def theaterChaseRainbow(strip, wait_ms=25):
                 strip.setPixelColor(i+q, 0)
 
 # Create NeoPixel object with appropriate configuration.
-strip = Adafruit_NeoPixel(Config['LED']['LED_COUNT'], Config['LED']['LED_PIN'], Config['LED']['LED_FREQ_HZ'], Config['LED']['LED_DMA'], Config['LED']['LED_INVERT'], Config['LED']['LED_BRIGHTNESS'], Config['LED']['LED_CHANNEL'], Config['LED']['LED_STRIP'])
+strip = ANSIPixel(Config['LED']['LED_COUNT'], Config['LED']['LED_PIN'], Config['LED']['LED_FREQ_HZ'], Config['LED']['LED_DMA'], Config['LED']['LED_INVERT'], Config['LED']['LED_BRIGHTNESS'], Config['LED']['LED_CHANNEL'], Config['LED']['LED_STRIP'])
 # Intialize the library (must be called once before other functions).
 strip.begin()
 
