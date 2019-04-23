@@ -58,7 +58,7 @@
 int i2cSlaveAddress (6 + (NODE_NUMBER * 2));
 
 // API level for read/write commands; increment when commands are modified
-#define NODE_API_LEVEL 12
+#define NODE_API_LEVEL 15
 
 const int slaveSelectPin = 10;  // Setup data pins for rx5808 comms
 const int spiDataPin = 11;
@@ -70,6 +70,7 @@ const int spiClockPin = 13;
 #define READ_FILTER_RATIO 0x20    // API_level>=10 uses 16-bit value
 #define READ_REVISION_CODE 0x22   // read NODE_API_LEVEL and verification value
 #define READ_NODE_RSSI_PEAK 0x23  // read 'state.nodeRssiPeak' value
+#define READ_NODE_RSSI_NADIR 0x24  // read 'state.nodeRssiNadir' value
 #define READ_ENTER_AT_LEVEL 0x31
 #define READ_EXIT_AT_LEVEL 0x32
 #define READ_HISTORY_EXPIRE_DURATION 0x35
@@ -82,6 +83,7 @@ const int spiClockPin = 13;
 #define WRITE_EXIT_AT_LEVEL 0x72
 #define WRITE_HISTORY_EXPIRE_DURATION 0x73  // adjust history catch window size
 #define MARK_START_TIME 0x77  // mark base time for returned lap-ms-since-start values
+#define FORCE_END_CROSSING 0x78  // kill current crossing flag regardless of RSSI value
 
 #define FILTER_RATIO_DIVIDER 10000.0f
 
@@ -125,6 +127,8 @@ struct
     uint16_t volatile passRssiNadir = 999;
     // peak smoothed rssi seen since the node frequency was set
     uint16_t volatile nodeRssiPeak = 0;
+    // lowest smoothed rssi seen since the node frequency was set
+    uint16_t volatile nodeRssiNadir = 999;
     // Set true after initial WRITE_FREQUENCY command received
     bool volatile rxFreqSetFlag = false;
     // base time for returned lap-ms-since-start values
@@ -231,6 +235,8 @@ void setup()
     Wire.onReceive(i2cReceive);  // Trigger 'i2cReceive' function on incoming data
     Wire.onRequest(i2cTransmit);  // Trigger 'i2cTransmit' function for outgoing data, on master request
 
+    TWAR = (i2cSlaveAddress << 1) | 1;  // enable broadcasts to be received
+
     // set ADC prescaler to 16 to speedup ADC readings
     sbi(ADCSRA, ADPS2);
     cbi(ADCSRA, ADPS1);
@@ -244,7 +250,7 @@ void setup()
     lastPass.lap = 0;
     lastPass.timeStamp = 0;
 
-    history.rssiMin = 9999;
+    history.rssiMin = 999;
     history.minExpires = 0;
     history.rssiMax = 0;
     history.rssiPeak = 0;
@@ -418,6 +424,13 @@ void loop()
             Serial.println(state.nodeRssiPeak);
         }
 
+        if (state.rssi < state.nodeRssiNadir)
+        {
+            state.nodeRssiNadir = state.rssi;
+            Serial.print("New nodeRssiNadir = ");
+            Serial.println(state.nodeRssiNadir);
+        }
+
         if ((!state.crossing) && state.rssi >= settings.enterAtLevel)
         {
             state.crossing = true;  // quad is going through the gate (lap pass starting)
@@ -455,20 +468,7 @@ void loop()
             if (state.rssi < settings.exitAtLevel)
             {
                 Serial.println("Crossing = False");
-
-                // save values for lap pass
-                lastPass.rssiPeakRaw = state.passRssiPeakRaw;
-                lastPass.rssiPeak = state.passRssiPeak;
-                // lap timestamp is between first and last peak RSSI
-                lastPass.timeStamp = (state.passRssiPeakRawLastTime + state.passRssiPeakRawTime) / 2;
-                lastPass.rssiNadir = state.passRssiNadir;
-                lastPass.lap = lastPass.lap + 1;
-
-                // reset lap-pass variables
-                state.crossing = false;
-                state.passRssiPeakRaw = 0;
-                state.passRssiPeak = 0;
-                state.passRssiNadir = 999;
+                end_crossing();
             }
         }
 
@@ -510,6 +510,24 @@ void loop()
 
     }
 }
+
+// Function called when crossing ends (by RSSI or I2C command)
+void end_crossing() {
+    // save values for lap pass
+    lastPass.rssiPeakRaw = state.passRssiPeakRaw;
+    lastPass.rssiPeak = state.passRssiPeak;
+    // lap timestamp is between first and last peak RSSI
+    lastPass.timeStamp = (state.passRssiPeakRawLastTime + state.passRssiPeakRawTime) / 2;
+    lastPass.rssiNadir = state.passRssiNadir;
+    lastPass.lap = lastPass.lap + 1;
+
+    // reset lap-pass variables
+    state.crossing = false;
+    state.passRssiPeakRaw = 0;
+    state.passRssiPeak = 0;
+    state.passRssiNadir = 999;
+}
+
 
 // Function called by twi interrupt service when master sends information to the slave
 // or when master sets up a specific read request
@@ -661,7 +679,8 @@ byte i2cHandleRx(byte command)
                 {  // if RX frequency changed
                     writeWordToEeprom(EEPROM_ADRW_RXFREQ, settings.vtxFreq);
                     state.nodeRssiPeak = 0;  // restart rssi peak tracking for node
-                    Serial.println("Set nodeRssiPeak = 0");
+                    state.nodeRssiNadir = 999;
+                    Serial.println("Set nodeRssiPeak = 0, nodeRssiNadir = 999");
                 }
             }
             break;
@@ -713,7 +732,7 @@ byte i2cHandleRx(byte command)
             // reset history
             history.peakFirstTime = state.raceStartTimeStamp;
             history.peakLastTime = state.raceStartTimeStamp;
-            history.rssiMin = 9999;
+            history.rssiMin = 999;
             history.minExpires = 0;
             history.rssiMax = 0;
             history.rssiPeak = 0;
@@ -722,6 +741,14 @@ byte i2cHandleRx(byte command)
             if (readAndValidateIoBuffer(MARK_START_TIME, 1))  // read byte value (not used)
                 success = true;
             break;
+
+        case FORCE_END_CROSSING:  // kill current crossing flag regardless of RSSI value
+            end_crossing();
+
+            if (readAndValidateIoBuffer(FORCE_END_CROSSING, 1))  // read byte value (not used)
+                success = true;
+            break;
+
     }
 
     ioCommand = 0;  // Clear previous command
@@ -760,6 +787,7 @@ void i2cTransmit()
             ioBufferWrite32(state.loopTime);
             ioBufferWrite8(state.crossing ? (uint8_t) 1 : (uint8_t) 0);  // 'crossing' status
             ioBufferWrite16(lastPass.rssiNadir);  // lowest rssi since end of last pass
+            ioBufferWrite16(state.nodeRssiNadir);
             break;
 
         case READ_ENTER_AT_LEVEL:  // lap pass begins when RSSI is at or above this level
@@ -784,6 +812,10 @@ void i2cTransmit()
 
         case READ_NODE_RSSI_PEAK:
             ioBufferWrite16(state.nodeRssiPeak);
+            break;
+
+        case READ_NODE_RSSI_NADIR:
+            ioBufferWrite16(state.nodeRssiNadir);
             break;
 
         case READ_TIME_MILLIS:

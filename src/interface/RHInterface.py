@@ -1,4 +1,4 @@
-'''Delta 5 hardware interface layer.'''
+'''RotorHazard hardware interface layer.'''
 
 import smbus # For i2c comms
 import gevent # For threads and timing
@@ -13,6 +13,7 @@ READ_LAP_STATS = 0x05
 READ_FILTER_RATIO = 0x20    # node API_level>=10 uses 16-bit value
 READ_REVISION_CODE = 0x22   # read NODE_API_LEVEL and verification value
 READ_NODE_RSSI_PEAK = 0x23  # read 'nodeRssiPeak' value
+READ_NODE_RSSI_NADIR = 0x24  # read 'nodeRssiNadir' value
 READ_ENTER_AT_LEVEL = 0x31
 READ_EXIT_AT_LEVEL = 0x32
 READ_HISTORY_EXPIRE_DURATION = 0x35
@@ -25,6 +26,7 @@ WRITE_ENTER_AT_LEVEL = 0x71
 WRITE_EXIT_AT_LEVEL = 0x72
 WRITE_HISTORY_EXPIRE_DURATION = 0x73
 MARK_START_TIME = 0x77      # mark base time for returned lap-ms-since-start values
+FORCE_END_CROSSING = 0x78   # kill current crossing flag regardless of RSSI value
 
 UPDATE_SLEEP = 0.1 # Main update loop delay
 
@@ -70,7 +72,7 @@ def validate_checksum(data):
     return checksum == data[-1]
 
 
-class Delta5Interface(BaseHardwareInterface):
+class RHInterface(BaseHardwareInterface):
     def __init__(self):
         BaseHardwareInterface.__init__(self)
         self.update_thread = None # Thread for running the main update loop
@@ -82,6 +84,7 @@ class Delta5Interface(BaseHardwareInterface):
         self.i2c = smbus.SMBus(1) # Start i2c bus
         self.semaphore = BoundedSemaphore(1) # Limits i2c to 1 read/write at a time
         self.i2c_timestamp = -1
+        self.i2c_lock = False # prevent calling i2c during race staging
 
         # Scans all i2c_addrs to populate nodes array
         self.nodes = [] # Array to hold each node object
@@ -94,7 +97,7 @@ class Delta5Interface(BaseHardwareInterface):
                 node = Node() # New node instance
                 node.i2c_addr = addr # Set current loop i2c_addr
                 node.index = index
-                self.nodes.append(node) # Add new node to Delta5Interface
+                self.nodes.append(node) # Add new node to RHInterface
             except IOError as err:
                 print "No node at address {0}".format(addr)
             gevent.sleep(I2C_CHILL_TIME)
@@ -110,6 +113,8 @@ class Delta5Interface(BaseHardwareInterface):
             if node.api_level >= 10:
                 node.api_valid_flag = True  # set flag for newer API functions supported
                 node.node_peak_rssi = self.get_value_16(node, READ_NODE_RSSI_PEAK)
+                if node.api_level >= 13:
+                    node.node_nadir_rssi = self.get_value_16(node, READ_NODE_RSSI_NADIR)
                 node.enter_at_level = self.get_value_16(node, READ_ENTER_AT_LEVEL)
                 node.exit_at_level = self.get_value_16(node, READ_EXIT_AT_LEVEL)
                 print "Node {0}: API_level={1}, Freq={2}, EnterAt={3}, ExitAt={4}".format(node.index+1, node.api_level, node.frequency, node.enter_at_level, node.exit_at_level)
@@ -131,7 +136,7 @@ class Delta5Interface(BaseHardwareInterface):
     def log(self, message):
         '''Hardware log of messages.'''
         if callable(self.hardware_log_callback):
-            string = 'Delta 5 Log: {0}'.format(message)
+            string = 'Interface: {0}'.format(message)
             self.hardware_log_callback(string)
 
     #
@@ -144,17 +149,28 @@ class Delta5Interface(BaseHardwareInterface):
             self.update_thread = gevent.spawn(self.update_loop)
 
     def update_loop(self):
-        while True:
-            self.update()
-            gevent.sleep(UPDATE_SLEEP)
+        try:
+            while True:
+                self.update()
+                gevent.sleep(UPDATE_SLEEP)
+        except KeyboardInterrupt:
+            print "Update thread terminated by keyboard interrupt"
 
     def update(self):
+        # stop asking for node updates during race staging
+        # (clear i2c comms in prep for immediate start broadcast)
+        if self.i2c_lock:
+            return None
+
         upd_list = []  # list of nodes with new laps (node, new_lap_id, lap_time_ms)
         cross_list = []  # list of nodes with crossing-flag changes
         for node in self.nodes:
             if node.frequency:
                 if node.api_valid_flag or node.api_level >= 5:
-                    data = self.read_block(node.i2c_addr, READ_LAP_STATS, 18)
+                    if node.api_level >= 13:
+                        data = self.read_block(node.i2c_addr, READ_LAP_STATS, 20)
+                    else:
+                        data = self.read_block(node.i2c_addr, READ_LAP_STATS, 18)
                 else:
                     data = self.read_block(node.i2c_addr, READ_LAP_STATS, 17)
 
@@ -183,6 +199,9 @@ class Delta5Interface(BaseHardwareInterface):
                                 if callable(self.node_crossing_callback):
                                     cross_list.append(node)
                             node.pass_nadir_rssi = unpack_16(data[16:])
+
+                            if node.api_level >= 13:
+                                node.node_nadir_rssi = unpack_16(data[18:])
 
                         else:  # if newer API functions not supported
                             lap_time_ms = unpack_32(data[1:])
@@ -258,6 +277,10 @@ class Delta5Interface(BaseHardwareInterface):
 
     def read_block(self, addr, offset, size):
         '''Read i2c data given an address, code, and data size.'''
+        if self.i2c_lock:
+            self.log('Read prevented: I2C Locked')
+            return None
+
         success = False
         retry_count = 0
         data = None
@@ -279,7 +302,7 @@ class Delta5Interface(BaseHardwareInterface):
                         else:
                             self.log('Retry (checksum) limit reached in read_block:  addr={0} offs={1} size={2} retry={3} ts={4}'.format(addr, offset, size, retry_count, self.i2c_timestamp))
             except IOError as err:
-                self.log(err)
+                self.log('Read Error: ' + str(err))
                 self.i2c_timestamp = self.milliseconds()
                 retry_count = retry_count + 1
                 if retry_count < I2C_RETRY_COUNT:
@@ -291,6 +314,10 @@ class Delta5Interface(BaseHardwareInterface):
 
     def write_block(self, addr, offset, data):
         '''Write i2c data given an address, code, and data.'''
+        if self.i2c_lock:
+            self.log('Write prevented: I2C Locked')
+            return False
+
         success = False
         retry_count = 0
         data_with_checksum = data
@@ -304,7 +331,7 @@ class Delta5Interface(BaseHardwareInterface):
                     self.i2c_timestamp = self.milliseconds()
                     success = True
             except IOError as err:
-                self.log(err)
+                self.log('Write Error: ' + str(err))
                 self.i2c_timestamp = self.milliseconds()
                 retry_count = retry_count + 1
                 if retry_count < I2C_RETRY_COUNT:
@@ -378,9 +405,27 @@ class Delta5Interface(BaseHardwareInterface):
                 self.log('Value Not Set ({0}): {1}/{2}/{3}'.format(retry_count, write_command, in_value, node))
         return success
 
+    def broadcast_value_8(self, write_command, in_value):
+        success = False
+        retry_count = 0
+        out_value = None
+        while success is False and retry_count < I2C_RETRY_COUNT:
+            if self.write_block(0x00, write_command, pack_8(in_value)):
+                success = True
+            else:
+                retry_count = retry_count + 1
+                self.log('Value Not Set ({0}): {1}/{2}/broadcast'.format(retry_count, write_command, in_value))
+        return success
+
     #
     # External functions for setting data
     #
+
+    def lock_i2c(self):
+        self.i2c_lock = True
+
+    def unlock_i2c(self):
+        self.i2c_lock = False
 
     def set_frequency(self, node_index, frequency):
         node = self.nodes[node_index]
@@ -445,7 +490,6 @@ class Delta5Interface(BaseHardwareInterface):
             self.set_filter_ratio(node.index, filter_ratio)
         return self.filter_ratio
 
-
     def set_history_expire(self, node_index, history_expire_duration):
         node = self.nodes[node_index]
         if node.api_level >= 12:
@@ -464,8 +508,15 @@ class Delta5Interface(BaseHardwareInterface):
             self.set_value_8(node, MARK_START_TIME, 0)
 
     def mark_start_time_global(self):
+        self.unlock_i2c()
+        bcast_flag = False
         for node in self.nodes:
-            self.mark_start_time(node.index)
+            if self.nodes[0].api_level >= 15:
+                if bcast_flag is False:
+                    bcast_flag = True  # only send broadcast once
+                    self.broadcast_value_8(MARK_START_TIME, 0)
+            else:
+                self.mark_start_time(node.index)  # if older API node
 
     def start_capture_enter_at_level(self, node_index):
         node = self.nodes[node_index]
@@ -505,6 +556,12 @@ class Delta5Interface(BaseHardwareInterface):
             }
         return None
 
+    def force_end_crossing(self, node_index):
+        node = self.nodes[node_index]
+        if node.api_level >= 14:
+            self.set_value_8(node, FORCE_END_CROSSING, 0)
+
+
 def get_hardware_interface():
-    '''Returns the delta 5 interface object.'''
-    return Delta5Interface()
+    '''Returns the RotorHazard interface object.'''
+    return RHInterface()

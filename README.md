@@ -1,4 +1,4 @@
-![RotorHazard Logo](/src/delta5server/static/image/RotorHazard%20Logo.svg)
+![RotorHazard Logo](/src/server/static/image/RotorHazard%20Logo.svg)
 
 # RotorHazard
 FPV Race Timing and Event Management

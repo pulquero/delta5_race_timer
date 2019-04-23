@@ -11,6 +11,7 @@
 		var pre_race = false; // pre-race countdown
 		var pre_delay = 0; // pre-race countdown duration
 		var hide_countdown = false; // hide pre-race display (for random delay)
+		var emit_finished_flag = false; // true if emitting 'race_time_finished' after countdown
 
 		this.buzzer = $('#buzzer')[0]; // Buzzer audio tag is loaded on race page already
 		this.stagebuzzer = $('#stagebuzzer')[0]; // Buzzer audio tag is loaded on race page already
@@ -22,7 +23,7 @@
 				$('.timing-clock').addClass('staging');
 				status = 2; // Set status to staging
 				generateTime(); // Updates html timer text
-				play_beep(100, 440, d5rt.tone_volume, 'triangle');
+				play_beep(100, 440, rotorhazard.tone_volume, 'triangle');
 				timer_id = setInterval(function () {
 					pre_delay--;
 					if (pre_delay <= 0) {
@@ -30,13 +31,13 @@
 						pre_race = false;
 						timer_control.start();
 					} else {
-						play_beep(100, 440, d5rt.tone_volume, 'triangle');
+						play_beep(100, 440, rotorhazard.tone_volume, 'triangle');
 						generateTime(); // Updates html timer text
 					}
 				}, 1000); // 1000 ms update rate
 			} else {
 				$('.timing-clock').removeClass('staging');
-				play_beep(700, 880, d5rt.tone_volume, 'triangle', 0.25);
+				play_beep(700, 880, rotorhazard.tone_volume, 'triangle', 0.25);
 				status = 1; // Set status to running
 				generateTime(); // Updates html timer text
 				timer_id = setInterval(function () {
@@ -112,7 +113,7 @@
 			mode = new_mode;
 		}
 
-		// Return the current race duration
+		// Set the race duration
 		this.setRaceDuration = function (new_duration) {
 			race_duration = new_duration;
 		}
@@ -142,10 +143,20 @@
 			return status;
 		}
 
-		// This methode will render the time variable to minute:second format
+		// Enable emitting 'race_time_finished' after countdown
+		this.enableEmitFinished = function () {
+			emit_finished_flag = true;
+		}
+
+		// Return true if emitting 'race_time_finished' after countdown
+		this.getEmitFinishedFlag = function () {
+			return emit_finished_flag;
+		}
+
+		// This method will render the time variable to minute:second format
 		function generateTime() {
 			if (pre_race && hide_countdown) {
-				$('.timing-clock').html(__('Ready'));
+				$('.timing-clock').html(__l('Ready'));
 			} else {
 				var display_time = time;
 				if (pre_race) display_time = pre_delay;
@@ -179,32 +190,34 @@
 			if (timer.getStatus() == 1) {
 				if (timer.getMode() == 0) { // Count down clock
 					if (time == 0) {
-						play_beep(700, 880, d5rt.tone_volume, 'triangle', 0.25);
+						play_beep(700, 880, rotorhazard.tone_volume, 'triangle', 0.25);
 						timer.stop();
-						socket.emit('race_time_finished');  // signal server
+						if (timer.getEmitFinishedFlag()) {
+							socket.emit('race_time_finished');  // signal server
+						}
 					} else if (time <= 5) { // Final seconds
-						play_beep(100, 440, d5rt.tone_volume, 'triangle');
+						play_beep(100, 440, rotorhazard.tone_volume, 'triangle');
 					} else if (time == 10) {
-						if (d5rt.voice_race_timer)
-							speak('<div class="timer">10 ' + __('Seconds') + '</div>', true);
+						if (rotorhazard.voice_race_timer)
+							speak('<div class="timer">10 ' + __l('Seconds') + '</div>', true);
 					}
 				}
 
-				if (d5rt.voice_race_timer) {
+				if (rotorhazard.voice_race_timer) {
 					if (time > 3600 && !(time % 3600)) { // 2+ hour callout (endurance)
 						var hours = time / 3600;
-						speak('<div class="timer">' + hours + ' ' + __('Hours') + '</div>', true);
+						speak('<div class="timer">' + hours + ' ' + __l('Hours') + '</div>', true);
 					} else if (time == 3600) {
-						speak('<div class="timer">1 ' + __('Hour') + '</div>', true);
+						speak('<div class="timer">1 ' + __l('Hour') + '</div>', true);
 					} else if (time == 1800) {
-						speak('<div class="timer">30 ' + __('Minutes') + '</div>', true);
+						speak('<div class="timer">30 ' + __l('Minutes') + '</div>', true);
 					} else if (time > 60 && time <= 300 && !(time % 60)) { // 2–5 min callout
 						var minutes = time / 60;
-						speak('<div class="timer">' + minutes + ' ' + __('Minutes') + '</div>', true);
+						speak('<div class="timer">' + minutes + ' ' + __l('Minutes') + '</div>', true);
 					} else if (time == 60) {
-						speak('<div class="timer">1 ' + __('Minute') + '</div>', true);
+						speak('<div class="timer">1 ' + __l('Minute') + '</div>', true);
 					} else if (time == 30) {
-						speak('<div class="timer">30 ' + __('Seconds') + '</div>', true);
+						speak('<div class="timer">30 ' + __l('Seconds') + '</div>', true);
 					}
 				}
 

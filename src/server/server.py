@@ -1,5 +1,7 @@
 '''RotorHazard server script'''
-SERVER_API = 11 # Server API version
+RELEASE_VERSION = "1.2.0 (dev)" # Public release version code
+SERVER_API = 12 # Server API version
+NODE_API_BEST = 15 # Most recent node API
 
 import os
 import sys
@@ -27,11 +29,11 @@ import time
 #import signal
 from ANSIPixel import *
 
-sys.path.append('../delta5interface')
-sys.path.append('/home/pi/delta5_race_timer/src/delta5interface')  # Needed to run on startup
-from RaceTrackerInterface import get_hardware_interface
+sys.path.append('../interface')
+sys.path.append('/home/pi/RotorHazard/src/interface')  # Needed to run on startup
 
-from Delta5Race import get_race_state
+from RaceTrackerInterface import get_hardware_interface
+from RHRace import get_race_state
 
 APP = Flask(__name__, static_url_path='/static')
 APP.config['SECRET_KEY'] = 'secret!'
@@ -45,7 +47,7 @@ CLASS_ID_NONE = 0  # indicator value for unclassified heat
 FREQUENCY_ID_NONE = 0  # indicator value for node disabled
 
 EVENT_RESULTS_CACHE = {} # Cache of results page leaderboards
-EVENT_RESULTS_CACHE_VAILD = False # Whether cache is valid (False = regenerate cache)
+EVENT_RESULTS_CACHE_VALID = False # Whether cache is valid (False = regenerate cache)
 
 DB_FILE_NAME = 'database.db'
 DB_BKP_DIR_NAME = 'db_bkp'
@@ -99,6 +101,20 @@ except ValueError:
     Config['GENERAL']['configFile'] = -1
     print 'Configuration file invalid, using defaults'
 
+
+INTERFACE = get_hardware_interface(Config)
+RACE = get_race_state() # For storing race management variables
+
+PROGRAM_START = datetime.now()
+RACE_START = datetime.now() # Updated on race start commands
+RACE_DURATION_MS = 0 # calculated when race is stopped
+
+Race_laps_winner_name = None  # set to name of winner in first-to-X-laps race
+RACE_STATUS_TIED_STR = 'Race is tied; continuing'  # shown when Most Laps Wins race tied
+RACE_STATUS_CROSSING = 'Waiting for cross'  # indicator for Most Laps Wins race
+
+Use_imdtabler_jar_flag = False  # set True if IMDTabler.jar is available
+
 #
 # Translation functions
 #
@@ -139,18 +155,62 @@ def getAllLanguages():
     # return full language dictionary
     return Languages
 
-INTERFACE = get_hardware_interface(Config)
-RACE = get_race_state() # For storing race management variables
+#
+# Server Info
+#
 
-PROGRAM_START = datetime.now()
-RACE_START = datetime.now() # Updated on race start commands
-RACE_DURATION_MS = 0 # calculated when race is stopped
+def buildServerInfo():
+    serverInfo = {}
 
-Race_laps_winner_name = None  # set to name of winner in first-to-X-laps race
-RACE_STATUS_TIED_STR = 'Race is tied; continuing'  # shown when Most Laps Wins race tied
-RACE_STATUS_CROSSING = 'Waiting for cross'  # indicator for Most Laps Wins race
+    serverInfo['about_html'] = "<ul>"
 
-Use_imdtabler_jar_flag = False  # set True if IMDTabler.jar is available
+    # Release Version
+    serverInfo['release_version'] = RELEASE_VERSION
+    serverInfo['about_html'] += "<li>" + __("Version") + ": " + str(RELEASE_VERSION) + "</li>"
+
+    # Server API
+    serverInfo['server_api'] = SERVER_API
+    serverInfo['about_html'] += "<li>" + __("Server API") + ": " + str(SERVER_API) + "</li>"
+
+    # Node API levels
+    node_api_level = False
+    serverInfo['node_api_match'] = True
+    if INTERFACE.nodes[0].api_level:
+        node_api_level = INTERFACE.nodes[0].api_level
+        serverInfo['node_api_lowest'] = node_api_level
+
+        serverInfo['node_api_levels'] = []
+        for node in INTERFACE.nodes:
+            serverInfo['node_api_levels'].append(node.api_level)
+
+            if node.api_level is not node_api_level:
+                serverInfo['node_api_match'] = False
+
+            if node.api_level < serverInfo['node_api_lowest']:
+                serverInfo['node_api_lowest'] = node.api_level
+
+    serverInfo['about_html'] += "<li>" + __("Node API") + ": "
+    if node_api_level:
+        if serverInfo['node_api_match']:
+            serverInfo['about_html'] += str(node_api_level)
+        else:
+            serverInfo['about_html'] += "[ "
+            for idx, level in serverInfo['node_api_levels']:
+                serverInfo['about_html'] += str(idx+1) + ":" + str(level) + " "
+            serverInfo['about_html'] += "]"
+    else:
+        serverInfo['about_html'] += "None (Delta5)"
+
+    serverInfo['about_html'] += "</li>"
+
+    serverInfo['node_api_best'] = NODE_API_BEST
+    if serverInfo['node_api_match'] is False or node_api_level < NODE_API_BEST:
+        # Show Recommended API notice
+        serverInfo['about_html'] += "<li><strong>" + __("Node Update Available") + ": " + str(NODE_API_BEST) + "</strong></li>"
+
+    serverInfo['about_html'] += "</ul>"
+
+    return serverInfo
 
 
 #
@@ -368,12 +428,12 @@ def requires_auth(f):
 @APP.route('/')
 def index():
     '''Route to home page.'''
-    return render_template('home.html', getOption=getOption, __=__)
+    return render_template('home.html', serverInfo=serverInfo, getOption=getOption, __=__)
 
 @APP.route('/heats')
 def heats():
     '''Route to heat summary page.'''
-    return render_template('heats.html', getOption=getOption, __=__)
+    return render_template('heats.html', serverInfo=serverInfo, getOption=getOption, __=__)
 
 @APP.route('/results')
 def results():
@@ -387,13 +447,13 @@ def results():
     # - One for all rounds, grouped by heats
     # - One for all pilots, sorted by fastest lap and shows average and other stats
     # - One for individual heats
-    return render_template('rounds.html', getOption=getOption, __=__)
+    return render_template('rounds.html', serverInfo=serverInfo, getOption=getOption, __=__)
 
 @APP.route('/race')
 @requires_auth
 def race():
     '''Route to race management page.'''
-    return render_template('race.html', getOption=getOption, __=__,
+    return render_template('race.html', serverInfo=serverInfo, getOption=getOption, __=__,
         num_nodes=RACE.num_nodes,
         current_heat=RACE.current_heat,
         heats=Heat, pilots=Pilot,
@@ -402,7 +462,7 @@ def race():
 @APP.route('/current')
 def racepublic():
     '''Route to race management page.'''
-    return render_template('racepublic.html', getOption=getOption, __=__,
+    return render_template('racepublic.html', serverInfo=serverInfo, getOption=getOption, __=__,
         num_nodes=RACE.num_nodes)
 
 @APP.route('/settings')
@@ -410,7 +470,7 @@ def racepublic():
 def settings():
     '''Route to settings page.'''
 
-    return render_template('settings.html', getOption=getOption, __=__,
+    return render_template('settings.html', serverInfo=serverInfo, getOption=getOption, __=__,
         num_nodes=RACE.num_nodes,
         ConfigFile=Config['GENERAL']['configFile'],
         Debug=Config['GENERAL']['DEBUG'])
@@ -420,7 +480,7 @@ def settings():
 def correction():
     '''Route to node correction page.'''
 
-    return render_template('correction.html', getOption=getOption, __=__,
+    return render_template('correction.html', serverInfo=serverInfo, getOption=getOption, __=__,
         num_nodes=RACE.num_nodes,
         current_profile = getOption("currentProfile"),
         profiles = Profiles)
@@ -429,7 +489,7 @@ def correction():
 def imdtabler():
     '''Route to IMDTabler page.'''
 
-    return render_template('imdtabler.html', getOption=getOption, __=__)
+    return render_template('imdtabler.html', serverInfo=serverInfo, getOption=getOption, __=__)
 
 # Debug Routes
 
@@ -437,13 +497,13 @@ def imdtabler():
 @requires_auth
 def hardwarelog():
     '''Route to hardware log page.'''
-    return render_template('hardwarelog.html', getOption=getOption, __=__)
+    return render_template('hardwarelog.html', serverInfo=serverInfo, getOption=getOption, __=__)
 
 @APP.route('/database')
 @requires_auth
 def database():
     '''Route to database page.'''
-    return render_template('database.html', getOption=getOption, __=__,
+    return render_template('database.html', serverInfo=serverInfo, getOption=getOption, __=__,
         pilots=Pilot,
         heats=Heat,
         race_class=RaceClass,
@@ -459,7 +519,7 @@ def database():
 
 @SOCKET_IO.on('connect')
 def connect_handler():
-    '''Starts the delta 5 interface and a heartbeat thread for rssi.'''
+    '''Starts the interface and a heartbeat thread for rssi.'''
     server_log('Client connected')
     heartbeat_thread_function.iter_tracker = 0  # declare/init variables for HB function
     heartbeat_thread_function.imdtabler_flag = False
@@ -591,6 +651,10 @@ def on_set_enter_at_level(data):
     node_index = data['node']
     enter_at_level = data['enter_at_level']
 
+    if not enter_at_level:
+        server_log('Node enter-at set null; getting from node: Node {0}'.format(node_index+1))
+        enter_at_level = INTERFACE.nodes[node_index].enter_at_level
+
     current_profile = int(getOption("currentProfile"))
     profile = Profiles.query.get(current_profile)
     enter_ats = json.loads(profile.enter_ats)
@@ -607,6 +671,10 @@ def on_set_exit_at_level(data):
     node_index = data['node']
     exit_at_level = data['exit_at_level']
 
+    if not exit_at_level:
+        server_log('Node exit-at set null; getting from node: Node {0}'.format(node_index+1))
+        exit_at_level = INTERFACE.nodes[node_index].exit_at_level
+
     current_profile = int(getOption("currentProfile"))
     profile = Profiles.query.get(current_profile)
     exit_ats = json.loads(profile.exit_ats)
@@ -622,12 +690,23 @@ def hardware_set_all_enter_ats(enter_at_levels):
     for idx in range(RACE.num_nodes):
         if enter_at_levels[idx]:
             INTERFACE.set_enter_at_level(idx, enter_at_levels[idx])
+        else:
+            on_set_enter_at_level({
+                'node': idx,
+                'enter_at_level': INTERFACE.nodes[idx].enter_at_level
+                })
 
 def hardware_set_all_exit_ats(exit_at_levels):
     '''send update to nodes'''
     for idx in range(RACE.num_nodes):
         if exit_at_levels[idx]:
             INTERFACE.set_exit_at_level(idx, exit_at_levels[idx])
+        else:
+            on_set_exit_at_level({
+                'node': idx,
+                'exit_at_level': INTERFACE.nodes[idx].exit_at_level
+                })
+
 
 @SOCKET_IO.on('set_language')
 def on_set_language(data):
@@ -674,8 +753,8 @@ def on_set_pilot_position(data):
 @SOCKET_IO.on('set_heat_note')
 def on_set_heat_note(data):
     '''Sets name of heat.'''
-    global EVENT_RESULTS_CACHE_VAILD
-    EVENT_RESULTS_CACHE_VAILD = False
+    global EVENT_RESULTS_CACHE_VALID
+    EVENT_RESULTS_CACHE_VALID = False
 
     heat = data['heat']
     note = data['note']
@@ -713,8 +792,8 @@ def on_add_race_class():
 @SOCKET_IO.on('set_race_class_name')
 def on_set_race_class_name(data):
     '''Sets race class name.'''
-    global EVENT_RESULTS_CACHE_VAILD
-    EVENT_RESULTS_CACHE_VAILD = False
+    global EVENT_RESULTS_CACHE_VALID
+    EVENT_RESULTS_CACHE_VALID = False
 
     race_class = data['class_id']
     race_class_name = data['class_name']
@@ -735,6 +814,7 @@ def on_set_race_class_format(data):
     DB.session.commit()
     server_log('Class {0} format: {1}'.format(race_class, race_class_format))
     emit_class_data(noself=True)
+    emit_current_heat(noself=True) # in case race operator is a different client, update locked format dropdown
 
 @SOCKET_IO.on('set_race_class_description')
 def on_set_race_class_name(data):
@@ -768,8 +848,8 @@ def on_add_pilot():
 @SOCKET_IO.on('set_pilot_callsign')
 def on_set_pilot_callsign(data):
     '''Gets pilot callsign to update database.'''
-    global EVENT_RESULTS_CACHE_VAILD
-    EVENT_RESULTS_CACHE_VAILD = False
+    global EVENT_RESULTS_CACHE_VALID
+    EVENT_RESULTS_CACHE_VALID = False
 
     pilot_id = data['pilot_id']
     callsign = data['callsign']
@@ -807,8 +887,8 @@ def on_set_pilot_phonetic(data):
 @SOCKET_IO.on('set_pilot_name')
 def on_set_pilot_name(data):
     '''Gets pilot name to update database.'''
-    global EVENT_RESULTS_CACHE_VAILD
-    EVENT_RESULTS_CACHE_VAILD = False
+    global EVENT_RESULTS_CACHE_VALID
+    EVENT_RESULTS_CACHE_VALID = False
 
     pilot_id = data['pilot_id']
     name = data['name']
@@ -950,6 +1030,9 @@ def on_backup_database():
 @SOCKET_IO.on('reset_database')
 def on_reset_database(data):
     '''Reset database.'''
+    global EVENT_RESULTS_CACHE_VALID
+    EVENT_RESULTS_CACHE_VALID = False
+
     reset_type = data['reset_type']
     if reset_type == 'races':
         db_reset_saved_races()
@@ -987,6 +1070,7 @@ def on_shutdown_pi():
     '''Shutdown the raspberry pi.'''
     emit_priority_message(__('Server has shut down.'), True)
     server_log('Shutdown pi')
+    time.sleep(1);
     os.system("sudo shutdown now")
 
 @SOCKET_IO.on("set_min_lap")
@@ -1124,8 +1208,9 @@ def on_set_team_racing_mode(data):
 # Race management socket io events
 
 @SOCKET_IO.on('prestage_race')
-def on_prestage_race():
+def on_prestage_race(data):
     '''Common race start events (do early to prevent processing delay when start is called)'''
+    initiator = data['initiator'] # client ID of session that started the race
     onoff(strip, Color(255,128,0)) #ORANGE for STAGING
     clear_laps() # Ensure laps are cleared before race start, shouldn't be needed
     emit_current_laps() # Race page, blank laps to the web client
@@ -1143,35 +1228,43 @@ def on_prestage_race():
         'hide_stage_timer': MIN != MAX,
         'start_delay': DELAY,
         'race_mode': race_format.race_mode,
-        'race_time_sec': race_format.race_time_sec
+        'race_time_sec': race_format.race_time_sec,
+        'initiator': initiator
     }) # Loop back to race page with chosen delay
+
+    INTERFACE.lock_i2c()
 
 
 @SOCKET_IO.on('stage_race')
 def on_stage_race(data):
     '''Bounce a response back to client for determining response time'''
+    INTERFACE.mark_start_time_global()
+    INTERFACE.lock_i2c()
     SOCKET_IO.emit('stage_ready', data)
 
 @SOCKET_IO.on('start_race')
 def on_start_race(data):
-    '''Starts the D5 race'''
+    '''Starts the race'''
     time.sleep(data['delay']) # TODO: Make this a non-blocking delay so race can be cancelled inside staging ***
-    for node in INTERFACE.nodes:
-        node.under_min_lap_count = 0
-    RACE.race_status = 1 # To enable registering passed laps
-    global RACE_START # To redefine main program variable
-    RACE_START = datetime.now() # Update the race start time stamp
-    global Race_laps_winner_name
-    Race_laps_winner_name = None  # name of winner in first-to-X-laps race
-    INTERFACE.mark_start_time_global()
-    onoff(strip, Color(0,255,0)) #GREEN for GO
-    emit_race_status() # Race page, to set race button states
-    server_log('Race started at {0}'.format(RACE_START))
+    if RACE.race_status != 1: # Only start a race if it is not already in progress
+        for node in INTERFACE.nodes:
+            node.under_min_lap_count = 0
+        RACE.race_status = 1 # To enable registering passed laps
+        RACE.timer_running = 1 # indicate race timer is running
+        global RACE_START # To redefine main program variable
+        RACE_START = datetime.now() # Update the race start time stamp
+        global Race_laps_winner_name
+        Race_laps_winner_name = None  # name of winner in first-to-X-laps race
+        INTERFACE.mark_start_time_global()
+        onoff(strip, Color(0,255,0)) #GREEN for GO
+        emit_race_status() # Race page, to set race button states
+        server_log('Race started at {0}'.format(RACE_START))
 
 @SOCKET_IO.on('stop_race')
-def on_race_status():
+def on_stop_race():
     '''Stops the race and stops registering laps.'''
     RACE.race_status = 2 # To stop registering passed laps, waiting for laps to be cleared
+    RACE.timer_running = 0 # indicate race timer not running
     global RACE_DURATION_MS # To redefine main program variable
     RACE_END = datetime.now() # Update the race end time stamp
 
@@ -1195,8 +1288,8 @@ def on_race_status():
 @SOCKET_IO.on('save_laps')
 def on_save_laps():
     '''Save current laps data to the database.'''
-    global EVENT_RESULTS_CACHE_VAILD
-    EVENT_RESULTS_CACHE_VAILD = False
+    global EVENT_RESULTS_CACHE_VALID
+    EVENT_RESULTS_CACHE_VALID = False
     heat = Heat.query.filter_by(heat_id=RACE.current_heat, node_index=0).first()
     # Get the last saved round for the current heat
     max_round = DB.session.query(DB.func.max(SavedRace.round_id)) \
@@ -1236,6 +1329,7 @@ def on_clear_laps():
 def clear_laps():
     '''Clear the current laps due to false start or practice.'''
     RACE.race_status = 0 # Laps cleared, ready to start next race
+    RACE.timer_running = 0 # indicate race timer not running
     global Race_laps_winner_name
     Race_laps_winner_name = None  # clear winner in first-to-X-laps race
     DB.session.query(CurrentLap).delete() # Clear out the current laps table
@@ -1258,22 +1352,76 @@ def on_set_current_heat(data):
 def on_recover_pass(data):
     node_index = data['node']
     catch_history = INTERFACE.get_catch_history(node_index)
-    server_log(catch_history['pass_ms'])
-    if data['method'] == 'max':
+
+    if data['method'] == 'max': # catch missed pass
+        server_log('Recovering pass: Node {0} / Pass {1}'.format(node_index + 1, catch_history['pass_ms']))
+
+        # get best lap possible regardless of data validity (client asked for one)
         INTERFACE.intf_simulate_lap(node_index, catch_history['pass_ms'])
-        on_set_enter_at_level({
-            'node': node_index,
-            'enter_at_level': catch_history['rssi_max'] - int(getOption("HistoryMaxOffset"))
-        })
 
-    if data['method'] == 'min':
-        on_set_exit_at_level({
-            'node': node_index,
-            'exit_at_level': catch_history['rssi_min'] + int(getOption("HistoryMinOffset"))
-        })
+        new_enterat = catch_history['rssi_max'] - int(getOption("HistoryMaxOffset"))
 
-    server_log('Recovering pass: Node {0} Method {1}'.format(node_index, data['method']))
-    emit_enter_and_exit_at_levels(nobroadcast=True)
+        if new_enterat > INTERFACE.nodes[node_index].node_nadir_rssi:
+            if new_enterat < INTERFACE.nodes[node_index].node_peak_rssi:
+                if new_enterat >= INTERFACE.nodes[node_index].exit_at_level + int(getOption("HistoryMinOffset")):
+                    on_set_enter_at_level({
+                        'node': node_index,
+                        'enter_at_level': new_enterat
+                    })
+                else:
+                    emit_priority_message(__('No tuning adjustment made on node {0}: Requested Enterat of {1} is too close or below ExitAt.').format(node_index + 1, new_enterat), False, nobroadcast=True)
+                    server_log('Skipping EnterAt adjustment: RSSI of {0} too close to ExitAt {1}' \
+                        .format(catch_history['rssi_max'], INTERFACE.nodes[node_index].exit_at_level))
+
+            else:
+                emit_priority_message(__('Tuning adjust failed on node {0}: Bad RSSI value ').format(node_index + 1), False, nobroadcast=True)
+                server_log('Skipping EnterAt adjustment: RSSI of {0} below Node Peak {1}' \
+                    .format(catch_history['rssi_max'], INTERFACE.nodes[node_index].node_peak_rssi))
+        else:
+            emit_priority_message(__('Tuning adjust failed on node {0}: Bad RSSI value').format(node_index + 1), False, nobroadcast=True)
+            server_log('Skipping EnterAt adjustment: RSSI of {0} above Node Nadir {1}' \
+                .format(catch_history['rssi_max'], INTERFACE.nodes[node_index].node_nadir_rssi))
+
+    if data['method'] == 'min': # force end crossing
+        server_log('Force end crossing: Node {0}'.format(node_index + 1))
+
+        # end crossing now
+        if INTERFACE.nodes[node_index].crossing_flag:
+            INTERFACE.force_end_crossing(node_index)
+
+            new_exitat = catch_history['rssi_min'] + int(getOption("HistoryMinOffset"))
+
+            if new_exitat > INTERFACE.nodes[node_index].node_nadir_rssi:
+                if new_exitat < INTERFACE.nodes[node_index].node_peak_rssi:
+                    if new_exitat >= INTERFACE.nodes[node_index].enter_at_level:
+                        if new_exitat + int(getOption("HistoryMaxOffset")) < INTERFACE.nodes[node_index].node_peak_rssi:
+                            on_set_enter_at_level({
+                                'node': node_index,
+                                'enter_at_level': new_exitat + int(getOption("HistoryMaxOffset"))
+                            })
+                            emit_priority_message(__('WARNING: Force end on node {0} required increase of EnterAt. EnterAt may be improperly calibrated.').format(node_index + 1), False, nobroadcast=True)
+                            server_log('Forced end required EnterAt adjustment')
+                        else:
+                            emit_priority_message(__('WARNING: Force end adjustment on node {0} failed: insufficient RSSI range.').format(node_index + 1), False, nobroadcast=True)
+                            server_log('Skipping EnterAt adjustment: adjustment required, but would have set above NodePeak')
+                    else:
+                        emit_priority_message(__('Force end failed on node {0}: Bad RSSI value.').format(node_index + 1), False, nobroadcast=True)
+                        server_log('Skipping ExitAt adjustment: RSSI of {0} under Node Peak {1}' \
+                            .format(catch_history['rssi_min'], INTERFACE.nodes[node_index].node_peak_rssi))
+
+                on_set_exit_at_level({
+                    'node': node_index,
+                    'exit_at_level': new_exitat
+                })
+            else:
+                emit_priority_message(__('Force end failed on node {0}: Bad RSSI value').format(node_index + 1), False, nobroadcast=True)
+                server_log('Skipping ExitAt adjustment: RSSI of {0} above Node Nadir {1}' \
+                    .format(catch_history['rssi_min'], INTERFACE.nodes[node_index].node_nadir_rssi))
+        else:
+            emit_priority_message(__('Cannot force end: Node {0} is not crossing').format(node_index + 1), False, nobroadcast=True)
+            server_log('Skipping ExitAt adjustment: Node {0} is not crossing'.format(node_index + 1))
+
+    emit_enter_and_exit_at_levels()
 
 @SOCKET_IO.on('delete_lap')
 def on_delete_lap(data):
@@ -1363,10 +1511,12 @@ def get_race_elapsed():
 
 @SOCKET_IO.on('race_time_finished')
 def race_time_finished():
-    last_raceFormat = int(getOption("currentFormat"))
-    race_format = RaceFormat.query.filter_by(id=last_raceFormat).first()
-    if race_format and race_format.win_condition == WIN_CONDITION_MOST_LAPS:  # Most Laps Wins Enabled
-        check_most_laps_win()  # check if pilot or team has most laps for win
+    if RACE.timer_running:
+        RACE.timer_running = 0 # indicate race timer no longer running
+        last_raceFormat = int(getOption("currentFormat"))
+        race_format = RaceFormat.query.filter_by(id=last_raceFormat).first()
+        if race_format and race_format.win_condition == WIN_CONDITION_MOST_LAPS:  # Most Laps Wins Enabled
+            check_most_laps_win()  # check if pilot or team has most laps for win
 
 @SOCKET_IO.on('imdtabler_update_freqs')
 def imdtabler_update_freqs(data):
@@ -1376,13 +1526,16 @@ def imdtabler_update_freqs(data):
 
 # Socket io emit functions
 
-def emit_priority_message(message, interrupt=False):
+def emit_priority_message(message, interrupt=False, **params):
     ''' Emits message to all clients '''
     emit_payload = {
         'message': message,
         'interrupt': interrupt
     }
-    SOCKET_IO.emit('priority_message', emit_payload)
+    if ('nobroadcast' in params):
+        emit('priority_message', emit_payload)
+    else:
+        SOCKET_IO.emit('priority_message', emit_payload)
 
 def emit_race_status(**params):
     '''Emits race status.'''
@@ -1417,6 +1570,7 @@ def emit_node_data(**params):
     '''Emits node data.'''
     emit_payload = {
             'node_peak_rssi': [node.node_peak_rssi for node in INTERFACE.nodes],
+            'node_nadir_rssi': [node.node_nadir_rssi for node in INTERFACE.nodes],
             'pass_peak_rssi': [node.pass_peak_rssi for node in INTERFACE.nodes],
             'pass_nadir_rssi': [node.pass_nadir_rssi for node in INTERFACE.nodes],
             'debug_pass_count': [node.debug_pass_count for node in INTERFACE.nodes]
@@ -1553,9 +1707,9 @@ def emit_round_data_notify(**params):
 def emit_round_data(**params):
     '''Emits saved races to rounds page.'''
     global EVENT_RESULTS_CACHE
-    global EVENT_RESULTS_CACHE_VAILD
+    global EVENT_RESULTS_CACHE_VALID
 
-    if EVENT_RESULTS_CACHE_VAILD:
+    if EVENT_RESULTS_CACHE_VALID:
         emit_payload = EVENT_RESULTS_CACHE
 
     else:
@@ -1614,7 +1768,7 @@ def emit_round_data(**params):
         }
 
         EVENT_RESULTS_CACHE = emit_payload
-        EVENT_RESULTS_CACHE_VAILD = True
+        EVENT_RESULTS_CACHE_VALID = True
 
     if ('nobroadcast' in params):
         emit('round_data', emit_payload)
@@ -2087,12 +2241,20 @@ def emit_current_heat(**params):
                 callsigns.append(None)
         else:
             callsigns.append(None)
-    heat_note = Heat.query.filter_by(heat_id=RACE.current_heat, node_index=0).first().note
+
+    heat_data = Heat.query.filter_by(heat_id=RACE.current_heat, node_index=0).first()
+
+    heat_note = heat_data.note
+
+    heat_format = None
+    if heat_data.class_id != CLASS_ID_NONE:
+        heat_format = RaceClass.query.get(heat_data.class_id).format_id
 
     emit_payload = {
         'current_heat': RACE.current_heat,
         'callsign': callsigns,
-        'heat_note': heat_note
+        'heat_note': heat_note,
+        'heat_format': heat_format
     }
     if ('nobroadcast' in params):
         emit('current_heat', emit_payload)
@@ -2280,7 +2442,7 @@ def check_most_laps_win(pass_node_index=-1, t_laps_dict=None, pilot_team_dict=No
         if tied_flag or max_lap_count <= 0:
             Race_laps_winner_name = RACE_STATUS_TIED_STR  # indicate status tied
             check_emit_team_racing_status(t_laps_dict)
-            emit_phonetic_text('Race tied')
+            emit_phonetic_text('Race tied', 'race_winner')
             return  # wait for next 'pass_record_callback()' event
 
         if win_name:  # if a team looks like the winner
@@ -2323,7 +2485,7 @@ def check_most_laps_win(pass_node_index=-1, t_laps_dict=None, pilot_team_dict=No
             if (Race_laps_winner_name is not RACE_STATUS_TIED_STR) or num_max_lap <= 1:
                 Race_laps_winner_name = win_name  # indicate a team has won
                 check_emit_team_racing_status(t_laps_dict)
-                emit_phonetic_text('Race done, winner is team ' + Race_laps_winner_name)
+                emit_phonetic_text('Race done, winner is team ' + Race_laps_winner_name, 'race_winner')
 
         else:    # if no team looks like the winner
             Race_laps_winner_name = RACE_STATUS_TIED_STR  # indicate status tied
@@ -2358,7 +2520,7 @@ def check_most_laps_win(pass_node_index=-1, t_laps_dict=None, pilot_team_dict=No
             Race_laps_winner_name = RACE_STATUS_TIED_STR  # indicate status tied
             if pass_node_index < 0:  # if called from 'race_time_finished()'
                 emit_team_racing_status(Race_laps_winner_name)
-                emit_phonetic_text('Race tied')
+                emit_phonetic_text('Race tied', 'race_winner')
             return
 
         # if any (other) pilot is in the process of crossing the gate and within one lap of
@@ -2404,7 +2566,7 @@ def check_most_laps_win(pass_node_index=-1, t_laps_dict=None, pilot_team_dict=No
                         if Race_laps_winner_name is not RACE_STATUS_TIED_STR:
                             Race_laps_winner_name = RACE_STATUS_TIED_STR  # indicate status tied
                             emit_team_racing_status(Race_laps_winner_name)
-                            emit_phonetic_text('Race tied')
+                            emit_phonetic_text('Race tied', 'race_winner')
                         return  # wait for next 'pass_record_callback()' event
         #server_log('DEBUG check_most_laps_win win_pilot_id={0}'.format(win_pilot_id))
 
@@ -2415,7 +2577,7 @@ def check_most_laps_win(pass_node_index=-1, t_laps_dict=None, pilot_team_dict=No
             win_phon_name = Pilot.query.filter_by(id=win_pilot_id).first().phonetic
             if len(win_phon_name) <= 0:  # if no phonetic then use callsign
                 win_phon_name = win_callsign
-            emit_phonetic_text('Race done, winner is ' + win_phon_name)
+            emit_phonetic_text('Race done, winner is ' + win_phon_name, 'race_winner')
         else:
             Race_laps_winner_name = RACE_STATUS_TIED_STR  # indicate status tied
 
@@ -2451,10 +2613,11 @@ def emit_first_pass_registered(node_idx, **params):
     else:
         SOCKET_IO.emit('first_pass_registered', emit_payload)
 
-def emit_phonetic_text(text_str, **params):
+def emit_phonetic_text(text_str, domain=False, **params):
     '''Emits given phonetic text.'''
     emit_payload = {
-        'text': text_str
+        'text': text_str,
+        'domain': domain
     }
     if ('nobroadcast' in params):
         emit('phonetic_text', emit_payload)
@@ -2660,7 +2823,7 @@ def pass_record_callback(node, ms_since_lap):
                 race_format = RaceFormat.query.get(int(getOption('currentFormat')))
                 min_lap = int(getOption("MinLapSec"))
                 min_lap_behavior = int(getOption("MinLapBehavior"))
-                
+
                 lap_ok_flag = True
                 if lap_id != 0:  # if initial lap then always accept and don't check lap time; else:
                     if lap_time < (min_lap * 1000):  # if lap time less than minimum
@@ -2669,7 +2832,7 @@ def pass_record_callback(node, ms_since_lap):
                                    .format(node.index+1, lap_id, time_format(lap_time), min_lap, node.under_min_lap_count))
                         if min_lap_behavior != 0:  # if behavior is 'Discard New Short Laps'
                             lap_ok_flag = False
-                
+
                 if lap_ok_flag:
                     # Add the new lap to the database
                     DB.session.add(CurrentLap(node_index=node.index, pilot_id=pilot_id, lap_id=lap_id, \
@@ -2709,7 +2872,7 @@ def pass_record_callback(node, ms_since_lap):
                             elif Race_laps_winner_name is not None and \
                                         team_name == Race_laps_winner_name and \
                                         team_laps >= race_format.number_laps_win:
-                                emit_phonetic_text('Winner is team ' + Race_laps_winner_name)
+                                emit_phonetic_text('Winner is team ' + Race_laps_winner_name, 'race_winner')
                         elif lap_id == 0:
                             emit_first_pass_registered(node.index) # play first-pass sound
 
@@ -2739,10 +2902,12 @@ def pass_record_callback(node, ms_since_lap):
                                             if len(win_phon_name) <= 0:  # if no phonetic then use callsign
                                                 win_phon_name = win_callsign
                                             Race_laps_winner_name = win_callsign  # call out winner (once)
-                                            emit_phonetic_text('Winner is ' + win_phon_name)
+                                            emit_phonetic_text('Winner is ' + win_phon_name, 'race_winner')
 
-                                else:  # no pilot has won the race; send phonetic data to be spoken
-                                    emit_phonetic_data(pilot_id, lap_id, lap_time, None, None)
+                                    else:  # no pilot has won the race; send phonetic data to be spoken
+                                        emit_phonetic_data(pilot_id, lap_id, lap_time, None, None)
+                                else:  # other win conditions
+                                        emit_phonetic_data(pilot_id, lap_id, lap_time, None, None)
                         elif lap_id == 0:
                             emit_first_pass_registered(node.index) # play first-pass sound
 
@@ -2791,7 +2956,7 @@ def server_log(message):
     SOCKET_IO.emit('hardware_log', message)
 
 def hardware_log_callback(message):
-    '''Message emitted from the delta 5 interface class.'''
+    '''Message emitted from the interface class.'''
     print message
     SOCKET_IO.emit('hardware_log', message)
 
@@ -2885,13 +3050,20 @@ def db_reset_profile():
     new_freqs = {}
     new_freqs["f"] = default_frequencies()
 
+    template = {}
+    template["v"] = [None, None, None, None, None, None, None, None]
+
     DB.session.add(Profiles(name=__("Outdoor"),
                              description = __("Medium filtering"),
                              frequencies = json.dumps(new_freqs),
+                             enter_ats = json.dumps(template),
+                             exit_ats = json.dumps(template),
                              f_ratio=100))
     DB.session.add(Profiles(name=__("Indoor"),
                              description = __("Strong filtering"),
                              frequencies = json.dumps(new_freqs),
+                             enter_ats = json.dumps(template),
+                             exit_ats = json.dumps(template),
                              f_ratio=10))
     DB.session.commit()
     setOption("currentProfile", 1)
@@ -2963,6 +3135,7 @@ def db_reset_options_defaults():
     DB.session.query(GlobalSettings).delete()
     setOption("server_api", SERVER_API)
     setOption("timerName", __("RotorHazard"))
+    setOption("timerLogo", "")
 
     setOption("hue_0", "212")
     setOption("sat_0", "55")
@@ -3046,25 +3219,9 @@ def restore_table(class_type, table_query_data, match_name='name'):
         except Exception as ex:
             server_log('Error restoring "{0}" table from previous database:  {1}'.format(class_type.__name__, ex))
 
-
-#
-# Program Initialize
-#
-
-# Save number of nodes found
-RACE.num_nodes = len(INTERFACE.nodes)
-print 'Number of nodes found: {0}'.format(RACE.num_nodes)
-
-# Delay to get I2C addresses through interface class initialization
-gevent.sleep(0.500)
-
-# Create database if it doesn't exist
-if not os.path.exists(DB_FILE_NAME):
-    db_init()
-elif int(getOption('server_api')) < SERVER_API:
-    server_log('Old server API version; resetting database')
+def recover_database():
     try:
-        server_log('Recovering Pilot data from previous database')
+        server_log('Recovering data from previous database')
         pilot_query_data = query_table_data(Pilot)
         raceFormat_query_data = query_table_data(RaceFormat)
         profiles_query_data = query_table_data(Profiles)
@@ -3073,6 +3230,7 @@ elif int(getOption('server_api')) < SERVER_API:
 
         carryoverOpts = [
             "timerName",
+            "timerLogo",
             "hue_0",
             "sat_0",
             "lum_0_low",
@@ -3121,12 +3279,59 @@ elif int(getOption('server_api')) < SERVER_API:
 
     DB.session.commit()
 
-    pilot_query_data = None       # make sure temp data is released
-    raceFormat_query_data = None
-    profiles_query_data = None
-    raceClass_query_data = None
-    heat_query_data = None
+def expand_heats():
+    for heat_ids in Heat.query.with_entities(Heat.heat_id).distinct():
+        for node in range(RACE.num_nodes):
+            heat_row = Heat.query.filter_by(heat_id=heat_ids.heat_id, node_index=node)
+            if not heat_row.count():
+                DB.session.add(Heat(heat_id=heat_ids.heat_id, node_index=node, pilot_id=PILOT_ID_NONE, class_id=CLASS_ID_NONE))
 
+    DB.session.commit()
+
+#
+# Program Initialize
+#
+
+# Save number of nodes found
+RACE.num_nodes = len(INTERFACE.nodes)
+print 'Number of nodes found: {0}'.format(RACE.num_nodes)
+
+# Delay to get I2C addresses through interface class initialization
+gevent.sleep(0.500)
+
+# if no DB file then create it now (before "__()" fn used in 'buildServerInfo()')
+db_inited_flag = False
+if not os.path.exists(DB_FILE_NAME):
+    server_log('No database.db file found; creating initial database')
+    db_init()
+    db_inited_flag = True
+
+# collect server info for About panel
+serverInfo = buildServerInfo()
+server_log('Release: {0} / Server API: {1} / Latest Node API: {2}'.format(RELEASE_VERSION, SERVER_API, NODE_API_BEST))
+if serverInfo['node_api_match'] is False:
+    server_log('** WARNING: Node API mismatch **')
+if serverInfo['node_api_lowest'] < NODE_API_BEST:
+    server_log('** NOTICE: Node firmware update available **')
+
+if not db_inited_flag:
+    if int(getOption('server_api')) < SERVER_API:
+        server_log('Old server API version; resetting database')
+        recover_database()
+    elif not Heat.query.count():
+        server_log('Heats are empty; resetting database')
+        recover_database()
+    elif not Profiles.query.count():
+        server_log('Profiles are empty; resetting database')
+        recover_database()
+    elif not RaceFormat.query.count():
+        server_log('Formats are empty; resetting database')
+        recover_database()
+
+# Expand heats (if number of nodes increases)
+expand_heats()
+
+# Import IMDTabler
 if os.path.exists(IMDTABLER_JAR_NAME):  # if 'IMDTabler.jar' is available
     try:
         java_ver = subprocess.check_output(['java', '-version'], stderr=subprocess.STDOUT)
@@ -3157,47 +3362,11 @@ current_profile = int(getOption("currentProfile"))
 on_set_profile({'profile': current_profile}, False)
 INTERFACE.set_history_expire_global(int(getOption("HistoryExpireDuration")))
 
-# Test data - Current laps
-# DB.session.add(CurrentLap(node_index=2, pilot_id=2, lap_id=0, lap_time_stamp=1000, lap_time=1000, lap_time_formatted=time_format(1000)))
-# DB.session.add(CurrentLap(node_index=2, pilot_id=2, lap_id=1, lap_time_stamp=11000, lap_time=10000, lap_time_formatted=time_format(10000)))
-# DB.session.add(CurrentLap(node_index=2, pilot_id=2, lap_id=2, lap_time_stamp=21000, lap_time=10000, lap_time_formatted=time_format(10000)))
-# DB.session.add(CurrentLap(node_index=3, pilot_id=3, lap_id=0, lap_time_stamp=1000, lap_time=1000, lap_time_formatted=time_format(1000)))
-# DB.session.add(CurrentLap(node_index=3, pilot_id=3, lap_id=1, lap_time_stamp=12000, lap_time=11000, lap_time_formatted=time_format(11000)))
-# DB.session.add(CurrentLap(node_index=3, pilot_id=3, lap_id=2, lap_time_stamp=24000, lap_time=12000, lap_time_formatted=time_format(12000)))
-# DB.session.add(CurrentLap(node_index=4, pilot_id=4, lap_id=0, lap_time_stamp=1000, lap_time=1000, lap_time_formatted=time_format(1000)))
-# DB.session.add(CurrentLap(node_index=4, pilot_id=4, lap_id=1, lap_time_stamp=12000, lap_time=11000, lap_time_formatted=time_format(11000)))
-# DB.session.add(CurrentLap(node_index=1, pilot_id=1, lap_id=0, lap_time_stamp=1000, lap_time=1000, lap_time_formatted=time_format(1000)))
-# DB.session.add(CurrentLap(node_index=1, pilot_id=1, lap_id=1, lap_time_stamp=13000, lap_time=12000, lap_time_formatted=time_format(12000)))
-# DB.session.commit()
+# Set current heat on startup
+if Heat.query.first():
+    RACE.current_heat = Heat.query.first().heat_id
 
-# Test data - SavedRace
-# db_init()
-# on_add_heat()
-# DB.session.add(SavedRace(round_id=1, heat_id=2, node_index=2, pilot_id=2, lap_id=0, lap_time_stamp=1000, lap_time=1000, lap_time_formatted=time_format(1000)))
-# DB.session.add(SavedRace(round_id=1, heat_id=2, node_index=2, pilot_id=2, lap_id=1, lap_time_stamp=15000, lap_time=14000, lap_time_formatted=time_format(14000)))
-# DB.session.add(SavedRace(round_id=1, heat_id=2, node_index=2, pilot_id=2, lap_id=2, lap_time_stamp=30000, lap_time=15000, lap_time_formatted=time_format(15000)))
-# DB.session.add(SavedRace(round_id=1, heat_id=2, node_index=3, pilot_id=3, lap_id=0, lap_time_stamp=1500, lap_time=1500, lap_time_formatted=time_format(1500)))
-# DB.session.add(SavedRace(round_id=1, heat_id=2, node_index=3, pilot_id=3, lap_id=1, lap_time_stamp=15000, lap_time=13500, lap_time_formatted=time_format(13500)))
-# DB.session.add(SavedRace(round_id=1, heat_id=2, node_index=1, pilot_id=1, lap_id=0, lap_time_stamp=750, lap_time=750, lap_time_formatted=time_format(750)))
-# DB.session.add(SavedRace(round_id=1, heat_id=2, node_index=1, pilot_id=1, lap_id=1, lap_time_stamp=10750, lap_time=10000, lap_time_formatted=time_format(10000)))
-# DB.session.commit()
-# DB.session.add(SavedRace(round_id=1, heat_id=1, node_index=2, pilot_id=2, lap_id=0, lap_time_stamp=1000, lap_time=1000, lap_time_formatted=time_format(1000)))
-# DB.session.add(SavedRace(round_id=1, heat_id=1, node_index=2, pilot_id=2, lap_id=1, lap_time_stamp=15000, lap_time=14000, lap_time_formatted=time_format(14000)))
-# DB.session.add(SavedRace(round_id=1, heat_id=1, node_index=2, pilot_id=2, lap_id=2, lap_time_stamp=30000, lap_time=15000, lap_time_formatted=time_format(15000)))
-# DB.session.add(SavedRace(round_id=1, heat_id=1, node_index=3, pilot_id=3, lap_id=0, lap_time_stamp=1500, lap_time=1500, lap_time_formatted=time_format(1500)))
-# DB.session.add(SavedRace(round_id=1, heat_id=1, node_index=3, pilot_id=3, lap_id=1, lap_time_stamp=15000, lap_time=13500, lap_time_formatted=time_format(13500)))
-# DB.session.add(SavedRace(round_id=1, heat_id=1, node_index=1, pilot_id=1, lap_id=0, lap_time_stamp=750, lap_time=750, lap_time_formatted=time_format(750)))
-# DB.session.add(SavedRace(round_id=1, heat_id=1, node_index=1, pilot_id=1, lap_id=1, lap_time_stamp=10750, lap_time=10000, lap_time_formatted=time_format(10000)))
-# DB.session.commit()
-# DB.session.add(SavedRace(round_id=2, heat_id=1, node_index=2, pilot_id=2, lap_id=0, lap_time_stamp=1000, lap_time=1000, lap_time_formatted=time_format(1000)))
-# DB.session.add(SavedRace(round_id=2, heat_id=1, node_index=2, pilot_id=2, lap_id=1, lap_time_stamp=16000, lap_time=15000, lap_time_formatted=time_format(15000)))
-# DB.session.add(SavedRace(round_id=2, heat_id=1, node_index=2, pilot_id=2, lap_id=2, lap_time_stamp=31000, lap_time=16000, lap_time_formatted=time_format(16000)))
-# DB.session.add(SavedRace(round_id=2, heat_id=1, node_index=3, pilot_id=3, lap_id=0, lap_time_stamp=1500, lap_time=1500, lap_time_formatted=time_format(1500)))
-# DB.session.add(SavedRace(round_id=2, heat_id=1, node_index=3, pilot_id=3, lap_id=1, lap_time_stamp=16000, lap_time=14500, lap_time_formatted=time_format(14500)))
-# DB.session.add(SavedRace(round_id=2, heat_id=1, node_index=1, pilot_id=1, lap_id=0, lap_time_stamp=750, lap_time=750, lap_time_formatted=time_format(750)))
-# DB.session.add(SavedRace(round_id=2, heat_id=1, node_index=1, pilot_id=1, lap_id=1, lap_time_stamp=11750, lap_time=11000, lap_time_formatted=time_format(11000)))
-# DB.session.commit()
-
+# Start HTTP server
 if __name__ == '__main__':
     port_val = Config['GENERAL']['HTTP_PORT']
     print "Running http server at port " + str(port_val)

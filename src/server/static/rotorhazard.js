@@ -96,6 +96,208 @@ LogSlider.prototype = {
    }
 };
 
+var keyCodeMap = {
+        48:"0", 49:"1", 50:"2", 51:"3", 52:"4", 53:"5", 54:"6", 55:"7", 56:"8", 57:"9", 59:";",
+        65:"a", 66:"b", 67:"c", 68:"d", 69:"e", 70:"f", 71:"g", 72:"h", 73:"i", 74:"j", 75:"k", 76:"l",
+        77:"m", 78:"n", 79:"o", 80:"p", 81:"q", 82:"r", 83:"s", 84:"t", 85:"u", 86:"v", 87:"w", 88:"x", 89:"y", 90:"z",
+        96:"0", 97:"1", 98:"2", 99:"3", 100:"4", 101:"5", 102:"6", 103:"7", 104:"8", 105:"9"
+}
+
+$.fn.setup_navigation = function(settings) {
+
+	settings = jQuery.extend({
+		menuHoverClass: 'show-menu',
+	}, settings);
+
+	// Add ARIA role to menubar and menu items
+	$(this).attr('role', 'menubar').find('li').attr('role', 'menuitem');
+
+	var top_level_links = $(this).find('> li > a');
+
+	// Added by Terrill: (removed temporarily: doesn't fix the JAWS problem after all)
+	// Add tabindex="0" to all top-level links
+	// Without at least one of these, JAWS doesn't read widget as a menu, despite all the other ARIA
+	//$(top_level_links).attr('tabindex','0');
+
+	// Set tabIndex to -1 so that top_level_links can't receive focus until menu is open
+	$(top_level_links).next('ul')
+		.attr('data-test','true')
+		.attr({ 'aria-hidden': 'true', 'role': 'menu' })
+		.find('a')
+		.attr('tabIndex',-1);
+
+	// Adding aria-haspopup for appropriate items
+	$(top_level_links).each(function(){
+		if($(this).next('ul').length > 0)
+			$(this).parent('li').attr('aria-haspopup', 'true');
+	});
+
+	$(top_level_links).hover(function(){
+		$(this).closest('ul')
+			.attr('aria-hidden', 'false')
+			.find('.'+settings.menuHoverClass)
+			.attr('aria-hidden', 'true')
+			.removeClass(settings.menuHoverClass)
+			.find('a')
+			.attr('tabIndex',-1);
+		$(this).next('ul')
+			.attr('aria-hidden', 'false')
+			.addClass(settings.menuHoverClass)
+			.find('a').attr('tabIndex',0);
+	});
+
+	$(top_level_links).focus(function(){
+		$(this).closest('ul')
+			// Removed by Terrill
+			// The following was adding aria-hidden="false" to root ul since menu is never hidden
+			// and seemed to be causing flakiness in JAWS (needs more testing)
+			// .attr('aria-hidden', 'false')
+			.find('.'+settings.menuHoverClass)
+			.attr('aria-hidden', 'true')
+			.removeClass(settings.menuHoverClass)
+			.find('a')
+			.attr('tabIndex',-1);
+
+	$(this).next('ul')
+			.attr('aria-hidden', 'false')
+			.addClass(settings.menuHoverClass)
+			.find('a').attr('tabIndex',0);
+	});
+
+	// Bind arrow keys for navigation
+	$(top_level_links).keydown(function(e){
+		if(e.keyCode == 37) {
+			e.preventDefault();
+			// This is the first item
+			if($(this).parent('li').prev('li').length == 0) {
+				$(this).parents('ul').find('> li').last().find('a').first().focus();
+			} else {
+				$(this).parent('li').prev('li').find('a').first().focus();
+			}
+		} else if(e.keyCode == 38) {
+			e.preventDefault();
+			if($(this).parent('li').find('ul').length > 0) {
+				$(this).parent('li').find('ul')
+					.attr('aria-hidden', 'false')
+					.addClass(settings.menuHoverClass)
+					.find('a').attr('tabIndex',0)
+					.last().focus();
+			}
+		} else if(e.keyCode == 39) {
+			e.preventDefault();
+			// This is the last item
+			if($(this).parent('li').next('li').length == 0) {
+				$(this).parents('ul').find('> li').first().find('a').first().focus();
+			} else {
+				$(this).parent('li').next('li').find('a').first().focus();
+			}
+		} else if(e.keyCode == 40) {
+			e.preventDefault();
+			if($(this).parent('li').find('ul').length > 0) {
+				$(this).parent('li').find('ul')
+					.attr('aria-hidden', 'false')
+					.addClass(settings.menuHoverClass)
+					.find('a').attr('tabIndex',0)
+					.first().focus();
+			}
+		} else if(e.keyCode == 13 || e.keyCode == 32) {
+			// If submenu is hidden, open it
+			e.preventDefault();
+			$(this).parent('li').find('ul[aria-hidden=true]')
+					.attr('aria-hidden', 'false')
+					.addClass(settings.menuHoverClass)
+					.find('a').attr('tabIndex',0)
+					.first().focus();
+		} else if(e.keyCode == 27) {
+			e.preventDefault();
+			$('.'+settings.menuHoverClass)
+				.attr('aria-hidden', 'true')
+				.removeClass(settings.menuHoverClass)
+				.find('a')
+				.attr('tabIndex',-1);
+		} else {
+			$(this).parent('li').find('ul[aria-hidden=false] a').each(function(){
+				if($(this).text().substring(0,1).toLowerCase() == keyCodeMap[e.keyCode]) {
+					$(this).focus();
+					return false;
+				}
+			});
+		}
+	});
+
+
+	var links = $(top_level_links).parent('li').find('ul').find('a');
+	$(links).keydown(function(e){
+		if(e.keyCode == 38) {
+			e.preventDefault();
+			// This is the first item
+			if($(this).parent('li').prev('li').length == 0) {
+				$(this).parents('ul').parents('li').find('a').first().focus();
+			} else {
+				$(this).parent('li').prev('li').find('a').first().focus();
+			}
+		} else if(e.keyCode == 40) {
+			e.preventDefault();
+			if($(this).parent('li').next('li').length == 0) {
+				$(this).parents('ul').parents('li').find('a').first().focus();
+			} else {
+				$(this).parent('li').next('li').find('a').first().focus();
+			}
+		} else if(e.keyCode == 27 || e.keyCode == 37) {
+			e.preventDefault();
+			$(this)
+				.parents('ul').first()
+					.prev('a').focus()
+					.parents('ul').first().find('.'+settings.menuHoverClass)
+					.attr('aria-hidden', 'true')
+					.removeClass(settings.menuHoverClass)
+					.find('a')
+					.attr('tabIndex',-1);
+		} else if(e.keyCode == 32) {
+			e.preventDefault();
+			window.location = $(this).attr('href');
+		} else {
+			var found = false;
+			$(this).parent('li').nextAll('li').find('a').each(function(){
+				if($(this).text().substring(0,1).toLowerCase() == keyCodeMap[e.keyCode]) {
+					$(this).focus();
+					found = true;
+					return false;
+				}
+			});
+
+			if(!found) {
+				$(this).parent('li').prevAll('li').find('a').each(function(){
+					if($(this).text().substring(0,1).toLowerCase() == keyCodeMap[e.keyCode]) {
+						$(this).focus();
+						return false;
+					}
+				});
+			}
+		}
+	});
+
+
+	// Hide menu if click or focus occurs outside of navigation
+	$(this).find('a').last().keydown(function(e){
+		if(e.keyCode == 9) {
+			// If the user tabs out of the navigation hide all menus
+			$('.'+settings.menuHoverClass)
+				.attr('aria-hidden', 'true')
+				.removeClass(settings.menuHoverClass)
+				.find('a')
+					.attr('tabIndex',-1);
+		}
+	});
+
+  	$(document).click(function(){ $('.'+settings.menuHoverClass).attr('aria-hidden', 'true').removeClass(settings.menuHoverClass).find('a').attr('tabIndex',-1); });
+
+	$(this).click(function(e){
+		e.stopPropagation();
+	});
+}
+
+
 var globalAudioCtx = new (window.AudioContext || window.webkitAudioContext || window.audioContext);
 
 var node_tone = [
@@ -158,8 +360,8 @@ function play_beep(duration, frequency, volume, type, fadetime, callback) {
 	}, duration + (fadetime * 1000));*/
 };
 
-/* d5rt object for local settings/storage */
-var d5rt = {
+/* rotorhazard object for local settings/storage */
+var rotorhazard = {
 	language_strings: {},
 	interface_language: '',
 	// text-to-speech callout options
@@ -173,6 +375,7 @@ var d5rt = {
 	voice_team_lap_count: true, // speak team lap counts
 	voice_lap_time: true, // speak lap times
 	voice_race_timer: true, // speak race timer
+	voice_race_winner: true, // speak race winner
 	tone_volume: 1.0, // race stage/start tone volume
 	beep_crossing_entered: false, // beep node crossing entered
 	beep_crossing_exited: false, // beep node crossing exited
@@ -191,85 +394,89 @@ var d5rt = {
 		if (!supportsLocalStorage()) {
 			return false;
 		}
-		localStorage['d5rt.voice_string_language'] = JSON.stringify(this.voice_string_language);
-		localStorage['d5rt.voice_language'] = JSON.stringify(this.voice_language);
-		localStorage['d5rt.voice_volume'] = JSON.stringify(this.voice_volume);
-		localStorage['d5rt.voice_rate'] = JSON.stringify(this.voice_rate);
-		localStorage['d5rt.voice_pitch'] = JSON.stringify(this.voice_pitch);
-		localStorage['d5rt.voice_callsign'] = JSON.stringify(this.voice_callsign);
-		localStorage['d5rt.voice_lap_count'] = JSON.stringify(this.voice_lap_count);
-		localStorage['d5rt.voice_team_lap_count'] = JSON.stringify(this.voice_team_lap_count);
-		localStorage['d5rt.voice_lap_time'] = JSON.stringify(this.voice_lap_time);
-		localStorage['d5rt.voice_race_timer'] = JSON.stringify(this.voice_race_timer);
-		localStorage['d5rt.tone_volume'] = JSON.stringify(this.tone_volume);
-		localStorage['d5rt.beep_crossing_entered'] = JSON.stringify(this.beep_crossing_entered);
-		localStorage['d5rt.beep_crossing_exited'] = JSON.stringify(this.beep_crossing_exited);
-		localStorage['d5rt.beep_manual_lap_button'] = JSON.stringify(this.beep_manual_lap_button);
-		localStorage['d5rt.beep_on_first_pass_button'] = JSON.stringify(this.beep_on_first_pass_button);
-		localStorage['d5rt.indicator_beep_volume'] = JSON.stringify(this.indicator_beep_volume);
-		localStorage['d5rt.min_lap'] = JSON.stringify(this.min_lap);
-		localStorage['d5rt.admin'] = JSON.stringify(this.admin);
-		localStorage['d5rt.primaryPilot'] = JSON.stringify(this.primaryPilot);
+		localStorage['rotorhazard.voice_string_language'] = JSON.stringify(this.voice_string_language);
+		localStorage['rotorhazard.voice_language'] = JSON.stringify(this.voice_language);
+		localStorage['rotorhazard.voice_volume'] = JSON.stringify(this.voice_volume);
+		localStorage['rotorhazard.voice_rate'] = JSON.stringify(this.voice_rate);
+		localStorage['rotorhazard.voice_pitch'] = JSON.stringify(this.voice_pitch);
+		localStorage['rotorhazard.voice_callsign'] = JSON.stringify(this.voice_callsign);
+		localStorage['rotorhazard.voice_lap_count'] = JSON.stringify(this.voice_lap_count);
+		localStorage['rotorhazard.voice_team_lap_count'] = JSON.stringify(this.voice_team_lap_count);
+		localStorage['rotorhazard.voice_lap_time'] = JSON.stringify(this.voice_lap_time);
+		localStorage['rotorhazard.voice_race_timer'] = JSON.stringify(this.voice_race_timer);
+		localStorage['rotorhazard.voice_race_winner'] = JSON.stringify(this.voice_race_winner);
+		localStorage['rotorhazard.tone_volume'] = JSON.stringify(this.tone_volume);
+		localStorage['rotorhazard.beep_crossing_entered'] = JSON.stringify(this.beep_crossing_entered);
+		localStorage['rotorhazard.beep_crossing_exited'] = JSON.stringify(this.beep_crossing_exited);
+		localStorage['rotorhazard.beep_manual_lap_button'] = JSON.stringify(this.beep_manual_lap_button);
+		localStorage['rotorhazard.beep_on_first_pass_button'] = JSON.stringify(this.beep_on_first_pass_button);
+		localStorage['rotorhazard.indicator_beep_volume'] = JSON.stringify(this.indicator_beep_volume);
+		localStorage['rotorhazard.min_lap'] = JSON.stringify(this.min_lap);
+		localStorage['rotorhazard.admin'] = JSON.stringify(this.admin);
+		localStorage['rotorhazard.primaryPilot'] = JSON.stringify(this.primaryPilot);
 		return true;
 	},
 	restoreData: function(dataType) {
 		if (supportsLocalStorage()) {
-			if (localStorage['d5rt.voice_string_language']) {
-				this.voice_string_language = JSON.parse(localStorage['d5rt.voice_string_language']);
+			if (localStorage['rotorhazard.voice_string_language']) {
+				this.voice_string_language = JSON.parse(localStorage['rotorhazard.voice_string_language']);
 			}
-			if (localStorage['d5rt.voice_language']) {
-				this.voice_language = JSON.parse(localStorage['d5rt.voice_language']);
+			if (localStorage['rotorhazard.voice_language']) {
+				this.voice_language = JSON.parse(localStorage['rotorhazard.voice_language']);
 			}
-			if (localStorage['d5rt.voice_volume']) {
-				this.voice_volume = JSON.parse(localStorage['d5rt.voice_volume']);
+			if (localStorage['rotorhazard.voice_volume']) {
+				this.voice_volume = JSON.parse(localStorage['rotorhazard.voice_volume']);
 			}
-			if (localStorage['d5rt.voice_rate']) {
-				this.voice_rate = JSON.parse(localStorage['d5rt.voice_rate']);
+			if (localStorage['rotorhazard.voice_rate']) {
+				this.voice_rate = JSON.parse(localStorage['rotorhazard.voice_rate']);
 			}
-			if (localStorage['d5rt.voice_pitch']) {
-				this.voice_pitch = JSON.parse(localStorage['d5rt.voice_pitch']);
+			if (localStorage['rotorhazard.voice_pitch']) {
+				this.voice_pitch = JSON.parse(localStorage['rotorhazard.voice_pitch']);
 			}
-			if (localStorage['d5rt.voice_callsign']) {
-				this.voice_callsign = JSON.parse(localStorage['d5rt.voice_callsign']);
+			if (localStorage['rotorhazard.voice_callsign']) {
+				this.voice_callsign = JSON.parse(localStorage['rotorhazard.voice_callsign']);
 			}
-			if (localStorage['d5rt.voice_lap_count']) {
-				this.voice_lap_count = JSON.parse(localStorage['d5rt.voice_lap_count']);
+			if (localStorage['rotorhazard.voice_lap_count']) {
+				this.voice_lap_count = JSON.parse(localStorage['rotorhazard.voice_lap_count']);
 			}
-			if (localStorage['d5rt.voice_team_lap_count']) {
-				this.voice_team_lap_count = JSON.parse(localStorage['d5rt.voice_team_lap_count']);
+			if (localStorage['rotorhazard.voice_team_lap_count']) {
+				this.voice_team_lap_count = JSON.parse(localStorage['rotorhazard.voice_team_lap_count']);
 			}
-			if (localStorage['d5rt.voice_lap_time']) {
-				this.voice_lap_time = JSON.parse(localStorage['d5rt.voice_lap_time']);
+			if (localStorage['rotorhazard.voice_lap_time']) {
+				this.voice_lap_time = JSON.parse(localStorage['rotorhazard.voice_lap_time']);
 			}
-			if (localStorage['d5rt.voice_race_timer']) {
-				this.voice_race_timer = JSON.parse(localStorage['d5rt.voice_race_timer']);
+			if (localStorage['rotorhazard.voice_race_timer']) {
+				this.voice_race_timer = JSON.parse(localStorage['rotorhazard.voice_race_timer']);
 			}
-			if (localStorage['d5rt.tone_volume']) {
-				this.tone_volume = JSON.parse(localStorage['d5rt.tone_volume']);
+			if (localStorage['rotorhazard.voice_race_winner']) {
+				this.voice_race_winner = JSON.parse(localStorage['rotorhazard.voice_race_winner']);
 			}
-			if (localStorage['d5rt.beep_crossing_entered']) {
-				this.beep_crossing_entered = JSON.parse(localStorage['d5rt.beep_crossing_entered']);
+			if (localStorage['rotorhazard.tone_volume']) {
+				this.tone_volume = JSON.parse(localStorage['rotorhazard.tone_volume']);
 			}
-			if (localStorage['d5rt.beep_crossing_exited']) {
-				this.beep_crossing_exited = JSON.parse(localStorage['d5rt.beep_crossing_exited']);
+			if (localStorage['rotorhazard.beep_crossing_entered']) {
+				this.beep_crossing_entered = JSON.parse(localStorage['rotorhazard.beep_crossing_entered']);
 			}
-			if (localStorage['d5rt.beep_manual_lap_button']) {
-				this.beep_manual_lap_button = JSON.parse(localStorage['d5rt.beep_manual_lap_button']);
+			if (localStorage['rotorhazard.beep_crossing_exited']) {
+				this.beep_crossing_exited = JSON.parse(localStorage['rotorhazard.beep_crossing_exited']);
 			}
-			if (localStorage['d5rt.beep_on_first_pass_button']) {
-				this.beep_on_first_pass_button = JSON.parse(localStorage['d5rt.beep_on_first_pass_button']);
+			if (localStorage['rotorhazard.beep_manual_lap_button']) {
+				this.beep_manual_lap_button = JSON.parse(localStorage['rotorhazard.beep_manual_lap_button']);
 			}
-			if (localStorage['d5rt.indicator_beep_volume']) {
-				this.indicator_beep_volume = JSON.parse(localStorage['d5rt.indicator_beep_volume']);
+			if (localStorage['rotorhazard.beep_on_first_pass_button']) {
+				this.beep_on_first_pass_button = JSON.parse(localStorage['rotorhazard.beep_on_first_pass_button']);
 			}
-			if (localStorage['d5rt.min_lap']) {
-				this.min_lap = JSON.parse(localStorage['d5rt.min_lap']);
+			if (localStorage['rotorhazard.indicator_beep_volume']) {
+				this.indicator_beep_volume = JSON.parse(localStorage['rotorhazard.indicator_beep_volume']);
 			}
-			if (localStorage['d5rt.admin']) {
-				this.admin = JSON.parse(localStorage['d5rt.admin']);
+			if (localStorage['rotorhazard.min_lap']) {
+				this.min_lap = JSON.parse(localStorage['rotorhazard.min_lap']);
 			}
-			if (localStorage['d5rt.primaryPilot']) {
-				this.primaryPilot = JSON.parse(localStorage['d5rt.primaryPilot']);
+			if (localStorage['rotorhazard.admin']) {
+				this.admin = JSON.parse(localStorage['rotorhazard.admin']);
+			}
+			if (localStorage['rotorhazard.primaryPilot']) {
+				this.primaryPilot = JSON.parse(localStorage['rotorhazard.primaryPilot']);
 			}
 			return true;
 		}
@@ -279,9 +486,9 @@ var d5rt = {
 
 function __(text) {
 	// return translated string
-	if (d5rt.language_strings[d5rt.interface_language]) {
-		if (d5rt.language_strings[d5rt.interface_language]['values'][text]) {
-			return d5rt.language_strings[d5rt.interface_language]['values'][text]
+	if (rotorhazard.language_strings[rotorhazard.interface_language]) {
+		if (rotorhazard.language_strings[rotorhazard.interface_language]['values'][text]) {
+			return rotorhazard.language_strings[rotorhazard.interface_language]['values'][text]
 		}
 	}
 	return text
@@ -289,14 +496,14 @@ function __(text) {
 
 function __l(text) {
 	// return translated string for local voice
-	var lang = d5rt.voice_string_language;
-	if (d5rt.voice_string_language == 'match-timer') {
-		lang = d5rt.interface_language;
+	var lang = rotorhazard.voice_string_language;
+	if (rotorhazard.voice_string_language == 'match-timer') {
+		lang = rotorhazard.interface_language;
 	}
 
-	if (d5rt.language_strings[lang]) {
-		if (d5rt.language_strings[lang]['values'][text]) {
-			return d5rt.language_strings[lang]['values'][text]
+	if (rotorhazard.language_strings[lang]) {
+		if (rotorhazard.language_strings[lang]['values'][text]) {
+			return rotorhazard.language_strings[lang]['values'][text]
 		}
 	}
 	return text
@@ -307,6 +514,7 @@ function nodeModel() {
 	this.trigger_rssi = false;
 	this.frequency = 0;
 	this.node_peak_rssi = false;
+	this.node_nadir_rssi = false;
 	this.pass_peak_rssi = false;
 	this.pass_nadir_rssi = false;
 	this.graphing = false;
@@ -361,27 +569,29 @@ nodeModel.prototype = {
 	checkValues: function(){
 		var warnings = [];
 
-		if (this.enter_at_level > this.node_peak_rssi) {
-			warnings.push(__('EnterAt is higher than NodePeak: <strong>Passes may not register</strong>'));
-		} else if (this.enter_at_level > this.node_peak_rssi - 10) {
-			warnings.push(__('EnterAt is very near NodePeak: <strong>Passes may not register</strong>'));
+		if (this.node_nadir_rssi > 0 && this.node_nadir_rssi < this.node_peak_rssi - 40) {
+			// assume node data is invalid unless nadir and peak are minimally separated
+			if (this.enter_at_level > this.node_peak_rssi) {
+				warnings.push(__('EnterAt is higher than NodePeak: <strong>Passes may not register</strong>. <em>Complete a lap pass before adjusting node values.</em>'));
+			} else if (this.enter_at_level > this.node_peak_rssi - 10) {
+				warnings.push(__('EnterAt is very near NodePeak: <strong>Passes may not register</strong>. <em>Complete a lap pass before adjusting node values.</em>'));
+			}
 		}
 
-//		add if NodeNadir is implemented
-//		if (this.exit_at_level <= this.node_nadir_rssi) {
-//			warnings.push('ExitAt is lower than NodeNadir: Passes WILL NOT register');
-//		}
+		if (this.node_nadir_rssi > 0 && this.exit_at_level <= this.node_nadir_rssi) {
+			warnings.push('ExitAt is lower than NodeNadir: <strong>Passes WILL NOT register</strong>.');
+		}
 
 		if (this.enter_at_level <= this.exit_at_level) {
-			warnings.push(__('EnterAt must be greater than ExitAt: <strong>Passes WILL NOT register correctly</strong>'));
+			warnings.push(__('EnterAt must be greater than ExitAt: <strong>Passes WILL NOT register correctly</strong>.'));
 		} else if (this.enter_at_level <= this.exit_at_level + 20) {
-			warnings.push(__('EnterAt is very near ExitAt: <strong>Passes may register too frequently</strong>'));
+			warnings.push(__('EnterAt is very near ExitAt: <strong>Passes may register too frequently</strong>.'));
 		}
 
 		if (this.exit_at_level < this.pass_nadir_rssi) {
-			warnings.push(__('ExitAt is lower than PassNadir: <strong>Passes may not complete</strong>'));
+			warnings.push(__('ExitAt is lower than PassNadir: <strong>Passes may not complete</strong>.'));
 		} else if (this.exit_at_level < this.pass_nadir_rssi + 10) {
-			warnings.push(__('ExitAt is very near PassNadir: <strong>Passes may not complete</strong>'));
+			warnings.push(__('ExitAt is very near PassNadir: <strong>Passes may not complete</strong>.'));
 		}
 
 		var output = '';
@@ -427,9 +637,9 @@ function get_standard_message() {
 function get_interrupt_message() {
 	msg = interrupt_message_queue[0];
 
-	var message_el = $('<div class="priority-message-interrupt">');
+	var message_el = $('<div class="priority-message-interrupt popup">');
 	message_el.append('<h2>' + __('Alert') + '</h2>');
-	message_el.append('<div class="message">' + msg + '</div>');
+	message_el.append('<div class="popup-content"><p>' + msg + '</p></div>');
 
 	$.magnificPopup.open({
 		items: {
@@ -449,10 +659,10 @@ function get_interrupt_message() {
 if (typeof jQuery != 'undefined') {
 jQuery(document).ready(function($){
 	// restore local settings
-	d5rt.voice_language = $().articulate('getVoices')[0].name; // set default voice
-	d5rt.restoreData();
+	rotorhazard.voice_language = $().articulate('getVoices')[0].name; // set default voice
+	rotorhazard.restoreData();
 
-	if (d5rt.admin) {
+	if (rotorhazard.admin) {
 		$('*').removeClass('admin-hide');
 	}
 
@@ -493,6 +703,25 @@ jQuery(document).ready(function($){
 		}
 	});
 
+	// Accessible dropdown menu
+	$('#nav-main>ul').setup_navigation();
+
+	var $menu = $('#menu'),
+		$menulink = $('.menu-link'),
+		$menuTrigger = $('.has-subnav > a');
+
+	$menulink.click(function(e) {
+		e.preventDefault();
+		$menulink.toggleClass('active');
+		$menu.toggleClass('active');
+	});
+
+	$menuTrigger.click(function(e) {
+		e.preventDefault();
+		var $this = $(this);
+		$this.toggleClass('active').next('ul').toggleClass('active');
+	});
+
 	// responsive tables
 	$('table').wrap('<div class="table-wrap">');
 
@@ -528,6 +757,16 @@ jQuery(document).ready(function($){
 
 	$(document).on('click', 'button', function(el){
 		this.blur();
+	});
+
+	// Popup generics
+	$('.open-mfp-popup').magnificPopup({
+		type:'inline',
+		midClick: true,
+	});
+
+	$('.cancel').click(function() {
+		$.magnificPopup.close();
 	});
 
 	// startup socket connection
@@ -742,10 +981,10 @@ var freq = {
 		return output;
 	},
 	updateSelects: function() {
-		for (var i in d5rt.nodes) {
-			var freqExists = $('#f_table_' + i + ' option[value=' + d5rt.nodes[i].frequency + ']').length;
+		for (var i in rotorhazard.nodes) {
+			var freqExists = $('#f_table_' + i + ' option[value=' + rotorhazard.nodes[i].frequency + ']').length;
 			if (freqExists) {
-				$('#f_table_' + i).val(d5rt.nodes[i].frequency);
+				$('#f_table_' + i).val(rotorhazard.nodes[i].frequency);
 			} else {
 				$('#f_table_' + i).val('n/a');
 			}
@@ -753,13 +992,13 @@ var freq = {
 	},
 	updateBlocks: function() {
 		// populate channel blocks
-		for (var i in d5rt.nodes) {
+		for (var i in rotorhazard.nodes) {
 			var channelBlock = $('.channel-block[data-node="' + i + '"]');
-			channelBlock.children('.ch').html(this.findByFreq(d5rt.nodes[i].frequency));
-			if (d5rt.nodes[i].frequency == 0) {
+			channelBlock.children('.ch').html(this.findByFreq(rotorhazard.nodes[i].frequency));
+			if (rotorhazard.nodes[i].frequency == 0) {
 				channelBlock.children('.fr').html('');
 			} else {
-				channelBlock.children('.fr').html(d5rt.nodes[i].frequency);
+				channelBlock.children('.fr').html(rotorhazard.nodes[i].frequency);
 			}
 		}
 	}

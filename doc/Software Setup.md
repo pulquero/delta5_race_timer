@@ -3,7 +3,7 @@
 ## Receiver Nodes (Arduinos)
 Note: The latest Arduino IDE (1.8+) is required from https://www.arduino.cc/en/Main/Software
 
-Open 'RotorHazard/src/delta5node/delta5node.ino' in the Arduino IDE.
+Open 'RotorHazard/src/node/node.ino' in the Arduino IDE.
 
 Configure the '#define NODE_NUMBER' line of the .ino for each node before uploading. For first node set NODE_NUMBER to 1, for second set it to 2, etc.
 ```
@@ -38,9 +38,13 @@ Do system update and upgrade (this can take a few minutes):
 sudo apt-get update && sudo apt-get upgrade
 ```
 
-Install python and the python drivers for the GPIO.
+Install Python and the Python drivers for the GPIO.
 ```
 sudo apt-get install python-dev python-rpi.gpio libffi-dev python-smbus build-essential python-pip git scons swig
+```
+
+Install the function interface into Python
+```
 sudo pip install cffi
 ```
 
@@ -55,18 +59,18 @@ core_freq=250
 ```
 Save and exit the file with Ctrl-X
 
-Install the RotorHazard code under '/home/pi/' on the Raspberry Pi as follows: Go to the [Latest Release page](https://github.com/RotorHazard/RotorHazard/releases/latest) for the project and note the version code. In the commands below, replace the two occurrences of "1.0.0" with the current version code, and enter the commands:
+Install the RotorHazard code under '/home/pi/' on the Raspberry Pi as follows: Go to the [Latest Release page](https://github.com/RotorHazard/RotorHazard/releases/latest) for the project and note the version code. In the commands below, replace the two occurrences of "1.1.0" with the current version code, and enter the commands:
 ```
 cd ~
-wget https://codeload.github.com/RotorHazard/RotorHazard/zip/v1.0.0 -O temp.zip
+wget https://codeload.github.com/RotorHazard/RotorHazard/zip/v1.1.0 -O temp.zip
 unzip temp.zip
-mv RotorHazard-1.0.0 RotorHazard
+mv RotorHazard-1.1.0 RotorHazard
 rm temp.zip
 ```
 
 Install web server dependencies:
 ```
-cd /home/pi/RotorHazard/src/delta5server
+cd /home/pi/RotorHazard/src/server
 sudo pip install -r requirements.txt
 ```
 
@@ -74,7 +78,7 @@ Update permissions in working folder:
 ```
 cd ~
 cd /home/pi/RotorHazard/src
-sudo chmod 777 delta5server 
+sudo chmod 777 server
 ```
 
 ### WS2812b LED Support
@@ -109,12 +113,12 @@ sudo reboot
 
 ### Starting the System
 
-The following instructions will start the web server on the raspberry pi, allowing full control and configuration of the system to run races and save lap times.  
+The following instructions will start the web server on the raspberry pi, allowing full control and configuration of the system to run races and save lap times.
 
 #### Manual Start
 Open a terminal and enter the following:
 ```
-cd /home/pi/RotorHazard/src/delta5server
+cd /home/pi/RotorHazard/src/server
 python server.py
 ```
 The server may be stopped by hitting Ctrl-C
@@ -131,7 +135,7 @@ Description=RotorHazard Server
 After=multi-user.target
 
 [Service]
-WorkingDirectory=/home/pi/RotorHazard/src/delta5server
+WorkingDirectory=/home/pi/RotorHazard/src/server
 ExecStart=/usr/bin/python server.py
 
 [Install]
